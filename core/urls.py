@@ -9,4 +9,6 @@ urlpatterns = [
     path('compare/', views.compare_data, name='compare'),
     path('download-matched/', views.download_matched, name='download_matched'),
     path('download-unmatched/', views.download_unmatched, name='download_unmatched'),
+    path('reset/', views.reset_data, name='reset_data'),
+
 ]

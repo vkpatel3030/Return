@@ -2,10 +2,15 @@ import os
 import pandas as pd
 from django.shortcuts import render, redirect
 from django.http import HttpResponse
-from django.conf import settings
-from .models import UploadedFile, ScannedAWB
-from django.core.files.storage import FileSystemStorage
 from django.contrib import messages 
+import tempfile
+import re
+
+# ✅ Global variables to store data (simple solution)
+uploaded_data = None
+scanned_awbs = set()
+matched_data = None
+unmatched_data = None
 
 # 🔹 Home Page
 def home(request):
@@ -13,28 +18,26 @@ def home(request):
 
 # 🔹 Upload File
 def upload_file(request):
+    global uploaded_data
     table_html = None
 
     if request.method == 'POST' and request.FILES.get('file'):
         uploaded_file = request.FILES['file']
 
-        # ✅ Temporary save in /tmp/
-        temp_path = os.path.join("/tmp", uploaded_file.name)
-        with open(temp_path, 'wb+') as destination:
-            for chunk in uploaded_file.chunks():
-                destination.write(chunk)
-
-        # ✅ Success message
-        messages.success(request, "✅ File uploaded successfully!")
-
-        # ✅ Read Excel/CSV data & convert to HTML table
         try:
+            # ✅ Read file directly from memory (no temp file needed)
             if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(temp_path)
+                uploaded_data = pd.read_csv(uploaded_file, dtype=str, header=6)
             else:
-                df = pd.read_excel(temp_path)
+                uploaded_data = pd.read_excel(uploaded_file, engine='openpyxl', dtype=str, header=6)
 
-            table_html = df.to_html(classes="table table-bordered table-striped text-center", index=False)
+            uploaded_data = uploaded_data.applymap(lambda x: str(x).strip())
+            
+            # ✅ Success message
+            messages.success(request, "✅ File uploaded successfully!")
+
+            # ✅ Convert to HTML table
+            table_html = uploaded_data.to_html(classes="table table-bordered table-striped text-center", index=False)
 
         except Exception as e:
             messages.error(request, f"❌ Error reading file: {e}")
@@ -47,56 +50,19 @@ def scan_awb(request):
 
 # 🔹 Save Scanned AWB Numbers
 def save_scan(request):
+    global scanned_awbs
+    
     if request.method == 'POST':
         scanned_data = request.POST.get('scanned_data', '')
         new_awbs = set(awb.strip() for awb in scanned_data.replace('\n', ',').split(',') if awb.strip())
 
-        file_path = os.path.join('/tmp', 'scanned_awbs.txt')
-        existing_awbs = set()
-
-        # Read old AWB numbers if file exists
-        if os.path.exists(file_path):
-            with open(file_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        if ',' in line:
-                            existing_awbs.update(x.strip() for x in line.split(','))
-                        else:
-                            existing_awbs.add(line)
-
-        # Combine old and new without duplicates
-        combined_awbs = existing_awbs.union(new_awbs)
-
-        # Save final combined list back to file
-        with open(file_path, 'w') as f:
-            for awb in combined_awbs:
-                f.write(f"{awb}\n")
-
+        # ✅ Store in global variable
+        scanned_awbs.update(new_awbs)
+        
+        messages.success(request, f"✅ {len(new_awbs)} AWB numbers added!")
         return redirect('compare')
 
     return HttpResponse("Invalid Request", status=400)
-def get_latest_uploaded_file():
-    upload_folder = os.path.join(settings.MEDIA_ROOT, 'uploads')
-    if not os.path.exists(upload_folder):
-        return None
-
-    files = [os.path.join(upload_folder, f) for f in os.listdir(upload_folder)
-             if os.path.isfile(os.path.join(upload_folder, f)) and f.endswith(('.xlsx', '.xls', '.csv'))]
-    if not files:
-        return None
-
-    latest_file = max(files, key=os.path.getctime)
-    return latest_file
-
-import re  # 🎯 NEW: For regex-based AWB extraction from Tracking Link
-
-import os
-import pandas as pd
-import re
-from django.conf import settings
-from django.shortcuts import render
-from django.http import HttpResponse
 
 # 🎯 AWB Extractor from any tracking link
 def extract_awb_from_url(url):
@@ -118,33 +84,20 @@ def extract_awb_from_url(url):
 
 # 🔹 Compare Data
 def compare_data(request):
+    global uploaded_data, scanned_awbs, matched_data, unmatched_data
+    
     try:
-        # 1. Load latest uploaded file
-        latest_file = get_latest_uploaded_file()
-        if not latest_file:
-            return HttpResponse("No file uploaded.")
+        # 1. Check if data exists
+        if uploaded_data is None:
+            messages.error(request, "❌ No file uploaded. Please upload a file first.")
+            return redirect('upload_file')
 
-        ext = os.path.splitext(latest_file)[1]
-        if ext == '.csv':
-            df = pd.read_csv(latest_file, dtype=str, header=None)
-        else:
-            df = pd.read_excel(latest_file, engine='openpyxl', dtype=str, header=None)
+        if not scanned_awbs:
+            messages.error(request, "❌ No scanned AWB data found. Please scan AWB numbers first.")
+            return redirect('scan_awb')
 
-        df.columns = df.iloc[6]   # 7th row = header
-        df = df.drop([i for i in range(7)])  # drop first 7 rows
-
-        # 2. Load scanned AWBs
-        scanned_file = os.path.join(settings.MEDIA_ROOT, 'scanned_awbs.txt')
-        if not os.path.exists(scanned_file):
-            return HttpResponse("No scanned AWB data found.")
-
-        with open(scanned_file, 'r') as f:
-            content = f.read()
-            if ',' in content:
-                scanned_awbs = [awb.strip() for awb in content.split(',') if awb.strip()]
-            else:
-                scanned_awbs = [awb.strip() for awb in content.strip().split('\n') if awb.strip()]
-        scanned_awbs_set = set([x.strip() for x in scanned_awbs if x])
+        # 2. Work with the uploaded data
+        df = uploaded_data.copy()
 
         # 3. Try to find column with tracking links or AWBs
         if 'Tracking Link' in df.columns:  # 🔸 use tracking link if available
@@ -152,59 +105,90 @@ def compare_data(request):
         elif 'AWB Number' in df.columns:  # 🔸 fallback to AWB Number column
             df['__awb__'] = df['AWB Number'].astype(str).str.strip()
         else:
-            return HttpResponse("AWB column not found.")
+            messages.error(request, "❌ AWB column not found in uploaded file.")
+            return redirect('upload_file')
 
         # 4. Match
-        df['Matched'] = df['__awb__'].isin(scanned_awbs_set)
+        df['Matched'] = df['__awb__'].isin(scanned_awbs)
 
-        matched_df = df[df['Matched']].drop(columns=['Matched'])
-        unmatched_df = df[~df['Matched']].drop(columns=['Matched'])
+        matched_data = df[df['Matched']].drop(columns=['Matched', '__awb__'])
+        unmatched_data = df[~df['Matched']].drop(columns=['Matched', '__awb__'])
 
-        # 5. Save Excel
-        matched_path = os.path.join("/tmp", 'matched.xlsx')
-        unmatched_path = os.path.join("/tmp", 'unmatched.xlsx')
-        matched_df.to_excel(matched_path, index=False)
-        unmatched_df.to_excel(unmatched_path, index=False)
-
-        # 6. Store to session
-        request.session['matched'] = matched_df.to_dict(orient='records')
-        request.session['unmatched'] = unmatched_df.to_dict(orient='records')
+        messages.success(request, f"✅ Comparison completed! Matched: {len(matched_data)}, Unmatched: {len(unmatched_data)}")
 
         return render(request, 'result.html', {
-            'matched_count': len(matched_df),
-            'unmatched_count': len(unmatched_df)
+            'matched_count': len(matched_data),
+            'unmatched_count': len(unmatched_data)
         })
 
     except Exception as e:
-        return HttpResponse(f"Error: {str(e)}")
-
+        messages.error(request, f"❌ Error during comparison: {str(e)}")
+        return redirect('upload_file')
 
 # 🔹 Download Matched
 def download_matched(request):
-    matched = request.session.get("matched", [])
-    if not matched:
-        return HttpResponse("⚠️ No matched data available.")
+    global matched_data
+    
+    if matched_data is None or len(matched_data) == 0:
+        messages.error(request, "⚠️ No matched data available.")
+        return redirect('compare')
 
-    df = pd.DataFrame(matched)
-    file_path = os.path.join("/tmp", "matched.xlsx")
-    df.to_excel(file_path, index=False)
-
-    with open(file_path, "rb") as f:
-        response = HttpResponse(f.read(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        response["Content-Disposition"] = 'attachment; filename="matched.xlsx"'
-        return response
+    try:
+        # ✅ Create Excel file in memory
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+            matched_data.to_excel(tmp_file.name, index=False)
+            
+            with open(tmp_file.name, "rb") as f:
+                response = HttpResponse(
+                    f.read(), 
+                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                response["Content-Disposition"] = 'attachment; filename="matched_parcels.xlsx"'
+                
+            # Clean up temp file
+            os.unlink(tmp_file.name)
+            return response
+            
+    except Exception as e:
+        messages.error(request, f"❌ Error creating download file: {str(e)}")
+        return redirect('compare')
 
 # 🔹 Download Unmatched
 def download_unmatched(request):
-    unmatched = request.session.get("unmatched", [])
-    if not unmatched:
-        return HttpResponse("⚠️ No unmatched data available.")
+    global unmatched_data
+    
+    if unmatched_data is None or len(unmatched_data) == 0:
+        messages.error(request, "⚠️ No unmatched data available.")
+        return redirect('compare')
 
-    df = pd.DataFrame(unmatched)
-    file_path = os.path.join("/tmp", "unmatched.xlsx")
-    df.to_excel(file_path, index=False)
+    try:
+        # ✅ Create Excel file in memory
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+            unmatched_data.to_excel(tmp_file.name, index=False)
+            
+            with open(tmp_file.name, "rb") as f:
+                response = HttpResponse(
+                    f.read(), 
+                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                response["Content-Disposition"] = 'attachment; filename="unmatched_parcels.xlsx"'
+                
+            # Clean up temp file
+            os.unlink(tmp_file.name)
+            return response
+            
+    except Exception as e:
+        messages.error(request, f"❌ Error creating download file: {str(e)}")
+        return redirect('compare')
 
-    with open(file_path, "rb") as f:
-        response = HttpResponse(f.read(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        response["Content-Disposition"] = 'attachment; filename="unmatched.xlsx"'
-        return response
+# 🔹 Reset All Data (optional)
+def reset_data(request):
+    global uploaded_data, scanned_awbs, matched_data, unmatched_data
+    
+    uploaded_data = None
+    scanned_awbs = set()
+    matched_data = None
+    unmatched_data = None
+    
+    messages.success(request, "✅ All data cleared!")
+    return redirect('home')

@@ -126,11 +126,12 @@ def compare_data(request):
 
         ext = os.path.splitext(latest_file)[1]
         if ext == '.csv':
-            df = pd.read_csv(latest_file, dtype=str, header=6)
+            df = pd.read_csv(latest_file, dtype=str, header=None)
         else:
-            df = pd.read_excel(latest_file, engine='openpyxl', dtype=str, header=6)
+            df = pd.read_excel(latest_file, engine='openpyxl', dtype=str, header=None)
 
-        df = df.applymap(lambda x: str(x).strip())
+        df.columns = df.iloc[6]   # 7th row = header
+        df = df.drop([i for i in range(7)])  # drop first 7 rows
 
         # 2. Load scanned AWBs
         scanned_file = os.path.join(settings.MEDIA_ROOT, 'scanned_awbs.txt')

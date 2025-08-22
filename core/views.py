@@ -51,7 +51,7 @@ def save_scan(request):
         scanned_data = request.POST.get('scanned_data', '')
         new_awbs = set(awb.strip() for awb in scanned_data.replace('\n', ',').split(',') if awb.strip())
 
-        file_path = os.path.join(settings.MEDIA_ROOT, 'scanned_awbs.txt')
+        file_path = os.path.join('/tmp', 'scanned_awbs.txt')
         existing_awbs = set()
 
         # Read old AWB numbers if file exists

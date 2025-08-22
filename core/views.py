@@ -19,7 +19,7 @@ def upload_file(request):
         uploaded_file = request.FILES['file']
 
         # ✅ Temporary save in /tmp/
-        temp_path = os.path.join(settings.BASE_DIR, 'tmp_uploaded_file.xlsx')
+        temp_path = os.path.join("/tmp", uploaded_file.name)
         with open(temp_path, 'wb+') as destination:
             for chunk in uploaded_file.chunks():
                 destination.write(chunk)

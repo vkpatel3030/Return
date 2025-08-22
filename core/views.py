@@ -161,8 +161,8 @@ def compare_data(request):
         unmatched_df = df[~df['Matched']].drop(columns=['Matched'])
 
         # 5. Save Excel
-        matched_path = os.path.join(settings.MEDIA_ROOT, 'matched.xlsx')
-        unmatched_path = os.path.join(settings.MEDIA_ROOT, 'unmatched.xlsx')
+        matched_path = os.path.join("/tmp", 'matched.xlsx')
+        unmatched_path = os.path.join("/tmp", 'unmatched.xlsx')
         matched_df.to_excel(matched_path, index=False)
         unmatched_df.to_excel(unmatched_path, index=False)
 
